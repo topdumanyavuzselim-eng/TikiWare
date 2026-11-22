@@ -3,8 +3,12 @@ name: Build TikiWare
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build TikiWare
     runs-on: ubuntu-latest
 
     steps:
@@ -16,66 +20,70 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
-      - name: Find and extract source
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Find and extract source ZIP
         shell: bash
         run: |
           set -e
 
           mkdir -p project
 
-          ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' -print -quit)
 
-          if [ -z "$ZIP" ]; then
-            echo "No source ZIP found."
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Source ZIP bulunamadı!"
             exit 1
           fi
 
-          echo "Using: $ZIP"
-          unzip -q "$ZIP" -d project
+          echo "ZIP bulundu: $ZIP_FILE"
+          unzip -q "$ZIP_FILE" -d project
 
       - name: Find Gradle project
         shell: bash
         run: |
           set -e
 
-          ROOT=$(find "$GITHUB_WORKSPACE/project" \
-            -type f \
-            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            -print -quit | xargs dirname)
+          GRADLEW=$(find project -type f -name gradlew -print -quit)
 
-          if [ -z "$ROOT" ]; then
-            ROOT=$(find "$GITHUB_WORKSPACE/project" \
-              -type f \
-              \( -name "build.gradle" -o -name "build.gradle.kts" \) \
-              -print -quit | xargs dirname)
+          if [ -z "$GRADLEW" ]; then
+            echo "gradlew bulunamadı, build.gradle aranıyor..."
+
+            BUILD_FILE=$(find project -type f \( -name build.gradle -o -name build.gradle.kts \) -print -quit)
+
+            if [ -z "$BUILD_FILE" ]; then
+              echo "ERROR: Gradle projesi bulunamadı!"
+              find project -maxdepth 3 -type f | head -100
+              exit 1
+            fi
+
+            PROJECT_ROOT=$(dirname "$BUILD_FILE")
+          else
+            PROJECT_ROOT=$(dirname "$GRADLEW")
           fi
 
-          if [ -z "$ROOT" ]; then
-            echo "Gradle project not found."
-            find project -maxdepth 3 -type f | head -100
-            exit 1
-          fi
-
-          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Gradle project: $ROOT"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "Gradle projesi: $PROJECT_ROOT"
 
       - name: Make Gradle executable
         run: chmod +x "$PROJECT_ROOT/gradlew"
 
       - name: Build
         working-directory: ${{ env.PROJECT_ROOT }}
-        run: ./gradlew build --no-daemon --stacktrace
-
-      - name: Find JAR files
-        shell: bash
         run: |
-          echo "Built JAR files:"
-          find "$PROJECT_ROOT" -type f -path "*/build/libs/*.jar" -print
+          ./gradlew build --no-daemon
+
+      - name: Show generated JARs
+        run: |
+          echo "Oluşturulan JAR dosyaları:"
+          find "$PROJECT_ROOT" -type f -path '*/build/libs/*.jar' -print
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: TikiWare-JAR
-          path: ${{ env.PROJECT_ROOT }}/**/build/libs/*.jar
+          name: TikiWare-1.21.4-JAR
+          path: ${{ env.PROJECT_ROOT }}/build/libs/*.jar
           if-no-files-found: error
