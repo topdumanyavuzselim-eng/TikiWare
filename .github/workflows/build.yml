@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 21
@@ -17,27 +17,65 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Extract source ZIP
+      - name: Find and extract source
+        shell: bash
         run: |
-          mkdir project
-          ZIP=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
+          set -e
+
+          mkdir -p project
+
+          ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP" ]; then
+            echo "No source ZIP found."
+            exit 1
+          fi
+
+          echo "Using: $ZIP"
           unzip -q "$ZIP" -d project
 
       - name: Find Gradle project
+        shell: bash
         run: |
-          ROOT=$(find project -name build.gradle -type f -print -quit | xargs dirname)
+          set -e
+
+          ROOT=$(find "$GITHUB_WORKSPACE/project" \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -print -quit | xargs dirname)
+
+          if [ -z "$ROOT" ]; then
+            ROOT=$(find "$GITHUB_WORKSPACE/project" \
+              -type f \
+              \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+              -print -quit | xargs dirname)
+          fi
+
+          if [ -z "$ROOT" ]; then
+            echo "Gradle project not found."
+            find project -maxdepth 3 -type f | head -100
+            exit 1
+          fi
+
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Found project at: $ROOT"
+          echo "Gradle project: $ROOT"
+
+      - name: Make Gradle executable
+        run: chmod +x "$PROJECT_ROOT/gradlew"
 
       - name: Build
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: ./gradlew build --no-daemon --stacktrace
+
+      - name: Find JAR files
+        shell: bash
         run: |
-          cd "$PROJECT_ROOT"
-          chmod +x gradlew
-          ./gradlew build --no-daemon
+          echo "Built JAR files:"
+          find "$PROJECT_ROOT" -type f -path "*/build/libs/*.jar" -print
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: TikiWare-1.21.4-JAR
-          path: project/**/build/libs/*.jar
+          name: TikiWare-JAR
+          path: ${{ env.PROJECT_ROOT }}/**/build/libs/*.jar
           if-no-files-found: error
